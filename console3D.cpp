@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory.h>
 #include <conio.h>
+#include <queue>
 
 
 #define SCREEN_WIDTH 150
@@ -28,8 +29,9 @@ const double fovy = M_PI / 3;
 const double aspect = 1;
 const double f = 50;
 const double n = 10;
-const double camera_sensitivity = M_PI / 60;
-const double camera_move_speed = 2;
+const double camera_sensitivity = M_PI / 60;	// 카메라 회전 감도
+const double camera_move_speed = 2;				// 카메라 이동 속도
+const int fog_range = 60;						// 어디서부터 회색으로 보일 것인지
 
 class vec4;
 class mat4;
@@ -46,9 +48,9 @@ public:
 	vec4 operator-(const vec4& other) { return vec4(x - other.x, y - other.y, z - other.z, 1); }
 	vec4 operator*(const double& k) { return vec4(x * k, y * k, z * k, w * k); }
 	double operator*(const vec4& other) { return x * other.x + y * other.y + z * other.z; }
+	double distance(const vec4& other) { return sqrt(pow(x - other.x, 2) + pow(y - other.y, 2) + pow(z - other.z, 2)); }
 	
 };
-
 
 class mat4 {
 public:
@@ -158,6 +160,66 @@ public:
 
 };
 
+class line {
+public:
+	vec4 p1, p2;
+
+	line(vec4 P1, vec4 P2) : p1(P1), p2(P2) {}
+
+	void drawOnScreen(mat4& transform, mat4& vpt) {
+		vec4 _p1 = transform * p1;
+		vec4 _p2 = transform * p2;
+		if (_p1.z > _p2.z) {
+			vec4 temp = _p1;
+			_p1 = _p2;
+			_p2 = temp;
+		}
+		/* _p1 is always closer to camera */
+		if (_p2.z < 0) return;
+		if (_p1.z < 0) {
+			vec4 dir = _p2 - _p1;
+			_p1 = _p1 + (dir * (-_p1.z / dir.z));
+		}
+		double front_ratio = (fog_range - _p1.z) / (_p2.z - _p1.z);
+
+		_p1 = _p1 * (1 / _p1.w);
+		_p2 = _p2 * (1 / _p2.w);
+		
+		/* _p1, _p2 are in NDC */
+
+		_p1 = vpt * _p1;
+		_p2 = vpt * _p2;
+		vec4 dir = _p2 - _p1;
+
+		double distance = _p1.distance(_p2);
+		double step = 1 / distance;
+		double front_until_here = distance * front_ratio;
+
+		if (front_until_here < 0) {
+			for (int i = 0; i < distance; i++) {
+				_p1 = _p1 + (dir * step);
+				int r = (int)round(_p1.y);
+				int c = (int)round(_p1.x);
+
+				if (r < 0 || r >= SCREEN_HEIGHT || c < 0 || c >= SCREEN_WIDTH) continue;
+				screen[r][c] |= BACK;
+			}
+		}
+		else {
+			for (int i = 0; i < distance; i++) {
+				_p1 = _p1 + (dir * step);
+				int r = (int)round(_p1.y);
+				int c = (int)round(_p1.x);
+
+				if (r < 0 || r >= SCREEN_HEIGHT || c < 0 || c >= SCREEN_WIDTH) continue;
+				screen[r][c] |= (i < front_until_here ? FRONT : BACK);
+			}
+		}
+		
+		return;
+	}
+};
+
 mat4 createAffineWSRotationMat4(const short axis, double angle) {
 	mat4 newMat4;
 	double s = sin(angle);
@@ -201,7 +263,7 @@ mat4 createViewportTransformMat4();
 
 class Object {
 public:
-	vector<vec4> vertices;
+	vector<line> lines;
 	mat4 pose;
 
 	Object() {}
@@ -242,23 +304,18 @@ public:
 		mat4 S = createAffineScalingMat4(vec);
 		pose = S * pose;
 	}
-	void drawOnScreen(Object camera) {
+	void drawOnScreen(const Object camera) {
 		mat4 vt = createViewTransformMat4(camera);
 		mat4 pt = createProjectionTransformMat4();
 		mat4 vpt = createViewportTransformMat4();
 
-		for (const vec4& vertex : vertices) {
-			vec4 _vertex = pt * (vt * (pose * vertex));
-			if (_vertex.z < 0) continue;
-			int distance_color = _vertex.z < 40 ? FRONT : BACK;
-			_vertex = _vertex * (1 / _vertex.z);
-			_vertex = vpt * _vertex;
-			int r = (int)round( _vertex.y);
-			int c = (int)round(_vertex.x);
+		mat4 transform = pt * (vt * pose);
 
-			if (r < 0 || r >= SCREEN_HEIGHT || c < 0 || c >= SCREEN_WIDTH) continue;
-			screen[r][c] |= distance_color;
+		for (line _line : this->lines) {
+			_line.drawOnScreen(transform, vpt);
 		}
+
+		return;
 	}
 };
 
@@ -318,20 +375,30 @@ void drawScreen() {
 Object obj_cube(const int cube_size, int x, int y, int z) {
 	Object cube;
 	const int half = (int)cube_size / 2;
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(i, -half, -half));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(i, half, -half));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(i, half, half));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(i, -half, half));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(-half, i, -half));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(half, i, -half));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(half, i, half));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(-half, i, half));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(-half, -half, i));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(half, -half, i));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(half, half, i));
-	for (double i = -half; i <= half; i += 0.5) cube.vertices.push_back(vec4(-half, half, i));
+
+	cube.lines.push_back(line(vec4(half, half, half), vec4(-half, half, half)));
+	cube.lines.push_back(line(vec4(half, half, half), vec4(half, -half, half)));
+	cube.lines.push_back(line(vec4(half, half, half), vec4(half, half, -half)));
+
+	cube.lines.push_back(line(vec4(half, -half, -half), vec4(-half, -half, -half)));
+	cube.lines.push_back(line(vec4(half, -half, -half), vec4(half, half, -half)));
+	cube.lines.push_back(line(vec4(half, -half, -half), vec4(half, -half, half)));
+
+	cube.lines.push_back(line(vec4(-half, -half, half), vec4(half, -half, half)));
+	cube.lines.push_back(line(vec4(-half, -half, half), vec4(-half, half, half)));
+	cube.lines.push_back(line(vec4(-half, -half, half), vec4(-half, -half, -half)));
+
+	cube.lines.push_back(line(vec4(-half, half, -half), vec4(half, half, -half)));
+	cube.lines.push_back(line(vec4(-half, half, -half), vec4(-half, -half, -half)));
+	cube.lines.push_back(line(vec4(-half, half, -half), vec4(-half, half, half)));
+
 	cube.translateWS(vec4(x, y, z));
 	return cube;
+}
+Object obj_straight_line(int x1, int y1, int z1, int x2, int y2, int z2) {
+	Object stick;
+	stick.lines.push_back(line(vec4(x1, y1, z1), vec4(x2, y2, z2)));
+	return stick;
 }
 
 int main() {
@@ -344,10 +411,12 @@ int main() {
 	/* Create Object */
 
 	Object camera;
-	Object cube1 = obj_cube(29, 0, 0, -50);
+	camera.translateWS(vec4(0, 0, 40));
+	Object cube1 = obj_cube(29, 0, 0, 0);
 
 	/* End */
 
+	string buffer;
 	while (1) {
 		/* Draw */
 
@@ -358,6 +427,7 @@ int main() {
 		/* Auto actions per frame */
 		
 		cube1.rotateOS(y_axis, M_PI / 60);
+		cube1.rotateOS(x_axis, M_PI / 60);
 
 
 		/* Control */
@@ -380,10 +450,10 @@ int main() {
 					break;
 				}
 			}
-			else if (kb_input == 97) camera.translateOS(vec4(-camera_move_speed, 0, 0)); // LEFT
-			else if (kb_input == 100) camera.translateOS(vec4(camera_move_speed, 0, 0)); // RIGHT
-			else if (kb_input == 119) camera.translateOS(vec4(0, 0, -camera_move_speed)); // FORWARD
-			else if (kb_input == 115) camera.translateOS(vec4(0, 0, camera_move_speed)); // BACKWARD
+			else if (kb_input == 97) camera.translateOS(vec4(-camera_move_speed, 0, 0));	// LEFT
+			else if (kb_input == 100) camera.translateOS(vec4(camera_move_speed, 0, 0));	// RIGHT
+			else if (kb_input == 119) camera.translateOS(vec4(0, 0, -camera_move_speed));	// FORWARD
+			else if (kb_input == 115) camera.translateOS(vec4(0, 0, camera_move_speed));	// BACKWARD
 		}
 	}
 
