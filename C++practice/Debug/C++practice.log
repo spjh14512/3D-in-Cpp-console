@@ -1,0 +1,3 @@
+﻿  console3D.cpp
+D:\Users\PC\source\repos\C++practice\C++practice\console3D.cpp(138): warning C4172: 지역 변수 또는 임시: newMat의 주소를 반환하고 있습니다.
+  C++practice.vcxproj -> D:\Users\PC\source\repos\C++practice\Debug\C++practice.exe
